@@ -2,8 +2,9 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QComboBox, QLabel)
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont
 from PyQt6.QtCore import Qt, QRectF
-
 from src.core.music_theory import Fretboard, CHROMATIC_SCALE, SCALE_FORMULAS
+from PyQt6.QtWidgets import QPushButton, QSpinBox
+from src.audio.jam_engine import JamEngine
 
 class FretboardWidget(QWidget):
     def __init__(self, fretboard_model: Fretboard):
@@ -36,7 +37,7 @@ class FretboardWidget(QWidget):
     def paintEvent(self, event):
         """Native PyQt6 method called whenever the widget needs to be drawn."""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing) # Smooth edges
 
         width = self.width()
         height = self.height()
@@ -108,14 +109,18 @@ class FretboardWidget(QWidget):
             painter.drawText(QRectF(x - radius, y - radius, radius * 2, radius * 2), 
                              Qt.AlignmentFlag.AlignCenter, note)
 
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Scale Visualizer")
+        self.setWindowTitle("Jam Session & Visualizer")
         
         self.guitar_model = Fretboard()
+        self.jam_engine = JamEngine()
+        
         self.init_ui()
+        
+        self.jam_engine.chord_changed.connect(self.on_chord_changed)
+        
         self.update_fretboard()
 
     def init_ui(self):
@@ -132,14 +137,29 @@ class MainWindow(QMainWindow):
         self.scale_combo.addItems(scales)
         self.scale_combo.setCurrentText("Blues")
         
+        self.bpm_spinbox = QSpinBox()
+        self.bpm_spinbox.setRange(40, 240)
+        self.bpm_spinbox.setValue(100)
+        self.bpm_spinbox.setSuffix(" BPM")
+        
+        self.play_button = QPushButton("▶ Play Jam")
+        self.play_button.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 5px 15px;")
+        
         self.root_combo.currentTextChanged.connect(self.update_fretboard)
         self.scale_combo.currentTextChanged.connect(self.update_fretboard)
+        self.play_button.clicked.connect(self.toggle_playback)
         
         control_layout.addWidget(QLabel("Root:"))
         control_layout.addWidget(self.root_combo)
         control_layout.addWidget(QLabel("Scale:"))
         control_layout.addWidget(self.scale_combo)
+        control_layout.addWidget(self.bpm_spinbox)
+        control_layout.addWidget(self.play_button)
         control_layout.addStretch()
+        
+        self.current_chord_label = QLabel("Waiting...")
+        self.current_chord_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffb74d;")
+        control_layout.addWidget(self.current_chord_label)
         
         self.fretboard_widget = FretboardWidget(self.guitar_model)
         
@@ -149,15 +169,40 @@ class MainWindow(QMainWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
-    def update_fretboard(self):
-        root_note = self.root_combo.currentText()
+    def update_fretboard(self, forced_root=None):
+        root_note = forced_root if forced_root else self.root_combo.currentText()
         scale_display = self.scale_combo.currentText()
         scale_key = scale_display.lower().replace(' ', '_')
         
         try:
             scale_notes = self.guitar_model.get_scale_notes(root_note, scale_key)
             positions = self.guitar_model.find_notes_on_fretboard(scale_notes)
-            
             self.fretboard_widget.set_active_notes(positions, root_note, scale_key)
         except Exception as e:
             print(f"Error updating fretboard: {e}")
+
+    def toggle_playback(self):
+        if self.jam_engine.is_playing:
+            self.jam_engine.stop_jam()
+            self.play_button.setText("▶ Play Jam")
+            self.play_button.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 5px 15px;")
+            self.current_chord_label.setText("Stopped.")
+            
+            self.update_fretboard()
+        else:
+            root = self.root_combo.currentText()
+            bpm = self.bpm_spinbox.value()
+            
+            self.jam_engine.set_parameters(root, bpm)
+            self.jam_engine.start()
+            
+            self.play_button.setText("■ Stop Jam")
+            self.play_button.setStyleSheet("background-color: #c62828; color: white; font-weight: bold; padding: 5px 15px;")
+
+    def on_chord_changed(self, new_chord: str):
+        self.current_chord_label.setText(f"Playing: {new_chord}7")
+        self.update_fretboard(forced_root=new_chord)
+
+    def closeEvent(self, event):
+        self.jam_engine.cleanup()
+        event.accept()
